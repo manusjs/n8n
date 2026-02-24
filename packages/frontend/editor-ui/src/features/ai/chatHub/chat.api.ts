@@ -21,6 +21,7 @@ import type {
 	ChatReconnectResponse,
 	ChatHubUpdateToolRequest,
 	ChatHubToolDto,
+	ChatHubSessionType,
 } from '@n8n/api-types';
 import type { INode } from 'n8n-workflow';
 
@@ -136,11 +137,15 @@ export const fetchConversationsApi = async (
 	context: IRestApiContext,
 	limit: number,
 	cursor?: string,
+	type?: ChatHubSessionType,
 ): Promise<ChatHubConversationsResponse> => {
 	const queryParams = new URLSearchParams();
 	queryParams.append('limit', limit.toString());
 	if (cursor) {
 		queryParams.append('cursor', cursor);
+	}
+	if (type) {
+		queryParams.append('type', type);
 	}
 
 	const apiEndpoint = `/chat/conversations?${queryParams.toString()}`;

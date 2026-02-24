@@ -382,6 +382,7 @@ export function findOneFromModelsResponse(
 export function createSessionFromStreamingState(
 	streaming: ChatStreamingState,
 	toolIds: string[],
+	manual = false,
 ): ChatHubSessionDto {
 	return {
 		id: streaming.sessionId,
@@ -391,6 +392,7 @@ export function createSessionFromStreamingState(
 		credentialId: null,
 		agentName: streaming.agent.name,
 		agentIcon: streaming.agent.icon,
+		type: manual ? 'manual' : 'production',
 		createdAt: new Date().toISOString(),
 		updatedAt: new Date().toISOString(),
 		toolIds,

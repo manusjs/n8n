@@ -9,6 +9,7 @@ import {
 	type ChatHubProvider,
 	chatHubConversationModelSchema,
 	type ChatModelDto,
+	type ChatHubSessionType,
 	agentIconOrEmojiSchema,
 } from '@n8n/api-types';
 import type { IBinaryData } from 'n8n-workflow';
@@ -120,4 +121,5 @@ export type ChatHubConversationModelWithCachedDisplayName = z.infer<
 
 export interface FetchOptions {
 	minLoadingTime?: number;
+	type?: ChatHubSessionType;
 }
