@@ -4,6 +4,7 @@ import { GlobalConfig } from '@n8n/config';
 import type {
 	CreateExecutionPayload,
 	ExecutionSummaries,
+	IExecutionDb,
 	IExecutionResponse,
 	IGetExecutionsQueryFilter,
 	User,
@@ -160,7 +161,11 @@ export class ExecutionService {
 		};
 	}
 
-	async getLastSuccessfulExecution(workflowId: string): Promise<IExecutionResponse | undefined> {
+	async getLastSuccessfulExecution(
+		workflowId: string,
+		user: User,
+		redactExecutionData?: boolean,
+	): Promise<IExecutionResponse | undefined> {
 		const executions = await this.executionRepository.findMultipleExecutions(
 			{
 				select: ['id', 'mode', 'startedAt', 'stoppedAt', 'workflowId'],
@@ -177,7 +182,14 @@ export class ExecutionService {
 			},
 		);
 
-		return executions[0];
+		const execution = executions[0];
+		if (!execution) return undefined;
+
+		await this.executionRedactionServiceProxy.processExecution(
+			execution as unknown as IExecutionDb,
+			{ user, redactExecutionData },
+		);
+		return execution;
 	}
 
 	async retry(
@@ -310,7 +322,7 @@ export class ExecutionService {
 			source: 'user-retry',
 		});
 
-		return {
+		const response: Omit<IExecutionResponse, 'createdAt'> = {
 			id: retriedExecutionId,
 			mode: executionData.mode,
 			startedAt: executionData.startedAt,
@@ -325,6 +337,20 @@ export class ExecutionService {
 			annotation: execution.annotation,
 			storedAt: execution.storedAt,
 		};
+
+		const redactQuery = ExecutionRedactionQueryDtoSchema.safeParse(req.query);
+		const redactExecutionData = redactQuery.success
+			? redactQuery.data.redactExecutionData
+			: undefined;
+		await this.executionRedactionServiceProxy.processExecution(
+			response as unknown as IExecutionDb,
+			{
+				user: req.user,
+				redactExecutionData,
+			},
+		);
+
+		return response;
 	}
 
 	async delete(req: ExecutionRequest.Delete, sharedWorkflowIds: string[]) {
