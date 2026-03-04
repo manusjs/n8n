@@ -1,87 +1,124 @@
 import { Logger } from '@n8n/backend-common';
 import { type IExecutionDb, type User } from '@n8n/db';
 import { Service } from '@n8n/di';
+import { WorkflowExecuteMode, WorkflowSettings } from 'n8n-workflow';
 
 import type {
 	ExecutionRedaction,
 	ExecutionRedactionOptions,
+	RedactableExecution,
 } from '@/executions/execution-redaction';
-import {
-	INodeExecutionData,
-	ITaskDataConnections,
-	WorkflowExecuteMode,
-	WorkflowSettings,
-} from 'n8n-workflow';
 import { ForbiddenError } from '@/errors/response-errors/forbidden.error';
 import { WorkflowFinderService } from '@/workflows/workflow-finder.service';
+
+import type {
+	IExecutionRedactionStrategy,
+	RedactionContext,
+} from './execution-redaction.interfaces';
+import { FullItemRedactionStrategy } from './strategies/full-item-redaction.strategy';
+import { NodeDefinedFieldRedactionStrategy } from './strategies/node-defined-field-redaction.strategy';
 
 const MANUAL_MODES: ReadonlySet<WorkflowExecuteMode> = new Set(['manual']);
 
 /**
- * Service responsible for redacting sensitive data from executions.
- * This service acts as a facade and delegates to the redaction module.
+ * Orchestrates the execution redaction pipeline.
+ *
+ * Responsibilities:
+ *   1. Resolve `userCanReveal` once (single DB call).
+ *   2. Build a `RedactionContext` shared by all strategies.
+ *   3. Construct the strategy pipeline based on policy and request options.
+ *   4. Run each strategy in order; strategies own all data mutations.
+ *
+ * Policy evaluation and permission checks live here.
+ * Data transformation lives in the strategies.
  */
 @Service()
 export class ExecutionRedactionService implements ExecutionRedaction {
 	constructor(
 		private readonly logger: Logger,
 		private readonly workflowFinderService: WorkflowFinderService,
+		private readonly fullItemRedactionStrategy: FullItemRedactionStrategy,
+		private readonly nodeDefinedFieldRedactionStrategy: NodeDefinedFieldRedactionStrategy,
 	) {}
 
-	/**
-	 * Initializes the execution redaction service.
-	 * This is a stub implementation that will be extended when the redaction module is fully implemented.
-	 */
 	async init(): Promise<void> {
 		this.logger.debug('Initializing ExecutionRedactionService...');
 	}
 
-	/**
-	 * Main entry point for redaction logic.
-	 * Processes an execution and applies redaction based on the provided options.
-	 *
-	 * @param execution - The execution to process
-	 * @param options - Options for redaction processing
-	 * @returns The processed execution (currently returns unmodified execution as stub)
-	 */
 	async processExecution(
 		execution: IExecutionDb,
 		options: ExecutionRedactionOptions,
 	): Promise<IExecutionDb> {
-		if (options.redactExecutionData === true) {
-			// user wants redacted data, this is always fine!
-			const canReveal =
-				this.policyAllowsReveal(execution) || (await this.canUserReveal(options.user, execution));
-			this.applyRedaction(execution, 'user_requested', canReveal);
-		} else if (options.redactExecutionData === false) {
-			// user wants unredacted data — allowed if the policy permits it or the user has the scope
-			const allowed =
-				this.policyAllowsReveal(execution) || (await this.canUserReveal(options.user, execution));
-			if (allowed) {
-				return execution;
-			} else {
-				throw new ForbiddenError();
-			}
-		} else {
-			// this should be the default case, we act based on the policy
-			const policy = this.resolvePolicy(execution);
+		const policyAllowsReveal = this.policyAllowsReveal(execution);
+		const userCanReveal = policyAllowsReveal || (await this.canUserReveal(options.user, execution));
 
-			// The policy is no redaction, so we just return the execution.
-			if (policy === 'none') {
-				return execution;
-			}
+		const context: RedactionContext = {
+			user: options.user,
+			redactExecutionData: options.redactExecutionData,
+			userCanReveal,
+		};
 
-			// The policy is to redact, non manual executions, so we return only if the mode is manual
-			if (policy === 'non-manual' && MANUAL_MODES.has(execution.mode)) {
-				return execution;
-			}
+		const pipeline = this.buildPipeline(execution, context, policyAllowsReveal);
+		const redactableExecution = this.toRedactableExecution(execution);
 
-			const canReveal =
-				this.policyAllowsReveal(execution) || (await this.canUserReveal(options.user, execution));
-			this.applyRedaction(execution, 'workflow_redaction_policy', canReveal);
+		for (const strategy of pipeline) {
+			await strategy.apply(redactableExecution, context);
 		}
 
 		return execution;
+	}
+
+	/**
+	 * Constructs the ordered strategy pipeline for this execution.
+	 *
+	 * - Reveal path (`redactExecutionData === false`): throws `ForbiddenError` if
+	 *   neither policy nor user permission allows it; otherwise runs no item-clearing
+	 *   strategies.
+	 * - All other paths: includes `FullItemRedactionStrategy` when items should be
+	 *   cleared (explicit redact, policy=all, or policy=non-manual on a non-manual mode).
+	 * - `NodeDefinedFieldRedactionStrategy` is always appended last — node-declared
+	 *   sensitive fields are never revealable.
+	 */
+	private buildPipeline(
+		execution: IExecutionDb,
+		context: RedactionContext,
+		policyAllowsReveal: boolean,
+	): IExecutionRedactionStrategy[] {
+		const pipeline: IExecutionRedactionStrategy[] = [];
+
+		if (context.redactExecutionData === false) {
+			if (!policyAllowsReveal && !context.userCanReveal) {
+				throw new ForbiddenError();
+			}
+			// No item-clearing on reveal path
+		} else {
+			const policy = this.resolvePolicy(execution);
+			const shouldClearItems =
+				context.redactExecutionData === true ||
+				policy === 'all' ||
+				(policy === 'non-manual' && !MANUAL_MODES.has(execution.mode));
+
+			if (shouldClearItems) {
+				pipeline.push(this.fullItemRedactionStrategy);
+			}
+		}
+
+		// NodeDefinedFieldRedactionStrategy runs in all cases — including reveal path
+		pipeline.push(this.nodeDefinedFieldRedactionStrategy);
+
+		return pipeline;
+	}
+
+	private toRedactableExecution(execution: IExecutionDb): RedactableExecution {
+		return {
+			mode: execution.mode,
+			workflowId: execution.workflowId,
+			data: execution.data,
+			workflowData: {
+				settings: execution.workflowData.settings,
+				nodes: execution.workflowData.nodes,
+			},
+		};
 	}
 
 	/**
@@ -117,8 +154,7 @@ export class ExecutionRedactionService implements ExecutionRedaction {
 	 * Resolves the effective redaction policy for an execution.
 	 *
 	 * Prefers the policy captured in `runtimeData.redaction` at execution time,
-	 * falls back to `workflowData.settings` for older
-	 * executions, and defaults to 'none'.
+	 * falls back to `workflowData.settings` for older executions, and defaults to 'none'.
 	 */
 	private resolvePolicy(execution: IExecutionDb): WorkflowSettings.RedactionPolicy {
 		return (
@@ -126,56 +162,5 @@ export class ExecutionRedactionService implements ExecutionRedaction {
 			execution.workflowData.settings?.redactionPolicy ??
 			'none'
 		);
-	}
-
-	/**
-	 * Mutates execution data in place, replacing all node output json with a
-	 * redaction marker and removing binary data. Also sets `execution.data.redactionInfo`
-	 * with metadata about the redaction.
-	 */
-	private applyRedaction(execution: IExecutionDb, reason: string, canReveal: boolean): void {
-		const runData = execution.data.resultData.runData;
-		if (!runData) return;
-
-		for (const nodeName of Object.keys(runData)) {
-			for (const taskData of runData[nodeName]) {
-				if (taskData.data) {
-					this.redactConnections(taskData.data, reason);
-				}
-				if (taskData.inputOverride) {
-					this.redactConnections(taskData.inputOverride, reason);
-				}
-			}
-		}
-
-		execution.data.redactionInfo = { isRedacted: true, reason, canReveal };
-	}
-
-	/** Walks an ITaskDataConnections structure and redacts every data item in place. */
-	private redactConnections(connections: ITaskDataConnections, reason: string): void {
-		for (const connectionType of Object.keys(connections)) {
-			const outputs = connections[connectionType];
-			for (const items of outputs) {
-				if (items) {
-					for (const item of items) {
-						this.redactItem(item, reason);
-					}
-				}
-			}
-		}
-	}
-
-	/**
-	 * Redacts all json and binary data from a single node execution data item.
-	 * This is the default "full" redaction strategy. Future strategies (field-level,
-	 * pattern-based) can replace this function without changing the traversal logic.
-	 */
-	private redactItem(item: INodeExecutionData, reason: string): void {
-		item.json = {};
-		delete item.binary;
-		item.redaction = {
-			redacted: true,
-			reason,
-		};
 	}
 }

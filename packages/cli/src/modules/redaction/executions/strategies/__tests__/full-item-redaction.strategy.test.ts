@@ -46,6 +46,7 @@ describe('FullItemRedactionStrategy', () => {
 				NodeA: [
 					{
 						startTime: 0,
+						executionIndex: 0,
 						executionTime: 0,
 						executionStatus: 'success',
 						source: [],
@@ -76,6 +77,7 @@ describe('FullItemRedactionStrategy', () => {
 				NodeA: [
 					{
 						startTime: 0,
+						executionIndex: 0,
 						executionTime: 0,
 						executionStatus: 'success',
 						source: [],
@@ -85,6 +87,7 @@ describe('FullItemRedactionStrategy', () => {
 				NodeB: [
 					{
 						startTime: 0,
+						executionIndex: 0,
 						executionTime: 0,
 						executionStatus: 'success',
 						source: [],
@@ -108,6 +111,7 @@ describe('FullItemRedactionStrategy', () => {
 				NodeA: [
 					{
 						startTime: 0,
+						executionIndex: 0,
 						executionTime: 0,
 						executionStatus: 'success',
 						source: [],
@@ -132,6 +136,7 @@ describe('FullItemRedactionStrategy', () => {
 				NodeA: [
 					{
 						startTime: 0,
+						executionIndex: 0,
 						executionTime: 0,
 						executionStatus: 'success',
 						source: [],
@@ -155,6 +160,7 @@ describe('FullItemRedactionStrategy', () => {
 				NodeA: [
 					{
 						startTime: 0,
+						executionIndex: 0,
 						executionTime: 0,
 						executionStatus: 'success',
 						source: [],
@@ -175,6 +181,7 @@ describe('FullItemRedactionStrategy', () => {
 				NodeA: [
 					{
 						startTime: 0,
+						executionIndex: 0,
 						executionTime: 0,
 						executionStatus: 'success',
 						source: [],
@@ -195,6 +202,7 @@ describe('FullItemRedactionStrategy', () => {
 				NodeA: [
 					{
 						startTime: 0,
+						executionIndex: 0,
 						executionTime: 0,
 						executionStatus: 'success',
 						source: [],
@@ -216,6 +224,7 @@ describe('FullItemRedactionStrategy', () => {
 				NodeA: [
 					{
 						startTime: 0,
+						executionIndex: 0,
 						executionTime: 0,
 						executionStatus: 'success',
 						source: [],

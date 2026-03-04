@@ -1,3 +1,4 @@
+import { Service } from '@n8n/di';
 import type { INodeExecutionData, ITaskDataConnections } from 'n8n-workflow';
 
 import type { RedactableExecution } from '@/executions/execution-redaction';
@@ -7,6 +8,7 @@ import type {
 	RedactionContext,
 } from '../execution-redaction.interfaces';
 
+@Service()
 export class FullItemRedactionStrategy implements IExecutionRedactionStrategy {
 	readonly name = 'full-item-redaction';
 
