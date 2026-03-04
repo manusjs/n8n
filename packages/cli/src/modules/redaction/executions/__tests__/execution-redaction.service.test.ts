@@ -36,6 +36,7 @@ describe('ExecutionRedactionService', () => {
 			workflowSettingsPolicy?: 'none' | 'all' | 'non-manual';
 			withRuntimeData?: boolean;
 			withRunData?: boolean;
+			withDynamicCredentials?: boolean;
 		} = {},
 	): IExecutionDb => {
 		const {
@@ -44,6 +45,7 @@ describe('ExecutionRedactionService', () => {
 			workflowSettingsPolicy,
 			withRuntimeData = true,
 			withRunData = false,
+			withDynamicCredentials = false,
 		} = overrides;
 
 		const executionData: IRunExecutionData['executionData'] = {
@@ -60,6 +62,14 @@ describe('ExecutionRedactionService', () => {
 				establishedAt: Date.now(),
 				source: mode,
 				redaction: { version: 1 as const, policy },
+				...(withDynamicCredentials ? { credentials: 'encrypted-credential-context' } : {}),
+			};
+		} else if (withDynamicCredentials) {
+			executionData.runtimeData = {
+				version: 1 as const,
+				establishedAt: Date.now(),
+				source: mode,
+				credentials: 'encrypted-credential-context',
 			};
 		}
 
@@ -516,6 +526,107 @@ describe('ExecutionRedactionService', () => {
 			const result = await service.processExecution(execution, options);
 
 			// runtimeData says 'none', so no redaction despite workflow settings saying 'all'
+			expect(result.data.resultData.runData.TestNode[0].data!.main[0]![0].json).toEqual({
+				secret: 'sensitive-data',
+			});
+			expect(result.data.redactionInfo).toBeUndefined();
+		});
+	});
+
+	describe('dynamic credentials forced redaction', () => {
+		it('should force-redact with dynamic_credentials reason when redactExecutionData=true', async () => {
+			const execution = createMockExecution({
+				policy: 'none',
+				mode: 'manual',
+				withRunData: true,
+				withDynamicCredentials: true,
+			});
+			const options: ExecutionRedactionOptions = {
+				user: mockUser,
+				redactExecutionData: true,
+			};
+
+			const result = await service.processExecution(execution, options);
+
+			const item = result.data.resultData.runData.TestNode[0].data!.main[0]![0];
+			expect(item.json).toEqual({});
+			expect(item.redaction).toEqual({ redacted: true, reason: 'dynamic_credentials' });
+			expect(result.data.redactionInfo).toEqual({
+				isRedacted: true,
+				reason: 'dynamic_credentials',
+				canReveal: false,
+			});
+		});
+
+		it('should throw ForbiddenError when redactExecutionData=false with dynamic credentials', async () => {
+			workflowFinderService.findWorkflowForUser.mockResolvedValue({ id: 'workflow-123' } as never);
+
+			const execution = createMockExecution({
+				policy: 'none',
+				mode: 'manual',
+				withRunData: true,
+				withDynamicCredentials: true,
+			});
+			const options: ExecutionRedactionOptions = {
+				user: mockUser,
+				redactExecutionData: false,
+			};
+
+			await expect(service.processExecution(execution, options)).rejects.toThrow(ForbiddenError);
+		});
+
+		it('should force-redact with dynamic_credentials in default mode even when policy is none', async () => {
+			const execution = createMockExecution({
+				policy: 'none',
+				mode: 'manual',
+				withRunData: true,
+				withDynamicCredentials: true,
+			});
+			const options: ExecutionRedactionOptions = { user: mockUser };
+
+			const result = await service.processExecution(execution, options);
+
+			const item = result.data.resultData.runData.TestNode[0].data!.main[0]![0];
+			expect(item.json).toEqual({});
+			expect(item.redaction).toEqual({ redacted: true, reason: 'dynamic_credentials' });
+			expect(result.data.redactionInfo).toEqual({
+				isRedacted: true,
+				reason: 'dynamic_credentials',
+				canReveal: false,
+			});
+		});
+
+		it('should force-redact even when user has reveal permission', async () => {
+			workflowFinderService.findWorkflowForUser.mockResolvedValue({ id: 'workflow-123' } as never);
+
+			const execution = createMockExecution({
+				policy: 'none',
+				mode: 'manual',
+				withRunData: true,
+				withDynamicCredentials: true,
+			});
+			const options: ExecutionRedactionOptions = { user: mockUser };
+
+			const result = await service.processExecution(execution, options);
+
+			expect(result.data.redactionInfo).toEqual({
+				isRedacted: true,
+				reason: 'dynamic_credentials',
+				canReveal: false,
+			});
+		});
+
+		it('should not force-redact when execution has no dynamic credentials', async () => {
+			const execution = createMockExecution({
+				policy: 'none',
+				mode: 'manual',
+				withRunData: true,
+				withDynamicCredentials: false,
+			});
+			const options: ExecutionRedactionOptions = { user: mockUser };
+
+			const result = await service.processExecution(execution, options);
+
 			expect(result.data.resultData.runData.TestNode[0].data!.main[0]![0].json).toEqual({
 				secret: 'sensitive-data',
 			});

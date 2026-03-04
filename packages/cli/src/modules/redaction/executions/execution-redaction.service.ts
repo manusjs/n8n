@@ -48,12 +48,27 @@ export class ExecutionRedactionService implements ExecutionRedaction {
 		execution: IExecutionDb,
 		options: ExecutionRedactionOptions,
 	): Promise<IExecutionDb> {
+		const hasDynCreds = this.hasDynamicCredentials(execution);
+
 		if (options.redactExecutionData === true) {
 			// user wants redacted data, this is always fine!
-			const canReveal =
+			let canReveal =
 				this.policyAllowsReveal(execution) || (await this.canUserReveal(options.user, execution));
-			this.applyRedaction(execution, 'user_requested', canReveal);
+			let reason = 'user_requested';
+
+			// Dynamic credential executions can never be revealed
+			if (hasDynCreds) {
+				canReveal = false;
+				reason = 'dynamic_credentials';
+			}
+
+			this.applyRedaction(execution, reason, canReveal);
 		} else if (options.redactExecutionData === false) {
+			// Dynamic credential executions can never be revealed
+			if (hasDynCreds) {
+				throw new ForbiddenError();
+			}
+
 			// user wants unredacted data — allowed if the policy permits it or the user has the scope
 			const allowed =
 				this.policyAllowsReveal(execution) || (await this.canUserReveal(options.user, execution));
@@ -65,6 +80,12 @@ export class ExecutionRedactionService implements ExecutionRedaction {
 		} else {
 			// this should be the default case, we act based on the policy
 			const policy = this.resolvePolicy(execution);
+
+			// Dynamic credential executions are always force-redacted
+			if (hasDynCreds) {
+				this.applyRedaction(execution, 'dynamic_credentials', false);
+				return execution;
+			}
 
 			// The policy is no redaction, so we just return the execution.
 			if (policy === 'none') {
@@ -82,6 +103,14 @@ export class ExecutionRedactionService implements ExecutionRedaction {
 		}
 
 		return execution;
+	}
+
+	/**
+	 * Returns true when the execution used dynamic credential resolution.
+	 * Such executions must always be redacted with canReveal = false.
+	 */
+	private hasDynamicCredentials(execution: IExecutionDb): boolean {
+		return Boolean(execution.data.executionData?.runtimeData?.credentials);
 	}
 
 	/**
